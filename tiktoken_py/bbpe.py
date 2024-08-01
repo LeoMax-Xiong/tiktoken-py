@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding:utf-8 -*-
-import re
+import regex as re
 from itertools import islice, tee
 class CoreBPE:
     def __init__(self,
