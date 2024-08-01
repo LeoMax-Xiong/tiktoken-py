@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from typing import AbstractSet, Collection, Literal, NoReturn, Optional, Union
-
+from .bbpe import CoreBPE
+import functools
+import regex
 class Encoding:
     def __init__(self,
                 name: str,
@@ -39,6 +41,15 @@ class Encoding:
             assert len(mergeable_ranks) + len(special_tokens) == explicit_n_vocab
             assert self.max_token_value == explicit_n_vocab - 1
 
+        self._core_bpe = CoreBPE(encoder=self._mergeable_ranks,
+                                special_tokens_encoder=self._special_tokens,
+                                pattern=self._pat_str,
+                            )
+
+    @functools.cached_property
+    def special_tokens_set(self) -> set[str]:
+        return set(self._special_tokens.keys())
+
     def encode(
         self,
         text: str,
@@ -73,7 +84,35 @@ class Encoding:
         [27, 91, 437, 1659, 5239, 91, 29]
         ```
         """
+        if allowed_special == "all":
+            allowed_special = self.special_tokens_set 
+
+        if disallowed_special == "all":
+            disallowed_special = self.special_tokens_set - allowed_special
+
+        if disallowed_special:
+            if not isinstance(disallowed_special, frozenset):
+                disallowed_special = frozenset(disallowed_special)
+
+            if match := _special_token_regex(disallowed_special).search(text):
+                raise ValueError(f"Text contains disallowed special token: {match.group()}")
         
+        if isinstance(allowed_special, frozenset):
+            allowed_special = set(allowed_special)
+
+        try:
+            self._core_bpe.encode(text, allowed_special)
+        except UnicodeEncodeError:
+            # BPE operates on bytes, but the regex operates on unicode. If we pass a str that is
+            # invalid UTF-8 to Rust, it will rightfully complain. Here we do a quick and dirty
+            # fixup for any surrogate pairs that may have sneaked their way into the text.
+            # Technically, this introduces a place where encode + decode doesn't roundtrip a Python
+            # string, but given that this is input we want to support, maybe that's okay.
+            # Also we use errors="replace" to handle weird things like lone surrogates.
+            text = text.encode("utf-8", "surrogatepass").decode("utf-8", "replace")
+            return self._core_bpe.encode(text, allowed_special)
+    
+
     def decode(self, tokens: list[int], errors: str = "replace") -> str:
         """Decodes a list of tokens into a string.
 
@@ -86,4 +125,11 @@ class Encoding:
         'hello world'
         ```
         """
+        print(f"start to decode the tokens: {tokens}")
         return self._core_bpe.decode_bytes(tokens).decode("utf-8", errors=errors)
+
+
+def _special_token_regex(tokens: frozenset[str]):
+    inner = "|".join(regex.escape(token) for token in tokens)
+
+    return regex.compile(f"({inner})")
