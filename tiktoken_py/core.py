@@ -101,7 +101,9 @@ class Encoding:
             allowed_special = set(allowed_special)
 
         try:
-            self._core_bpe.encode(text, allowed_special)
+            # Encode the text using BPE
+            tokens, _ = self._core_bpe.encode(text, allowed_special)
+            return tokens
         except UnicodeEncodeError:
             # BPE operates on bytes, but the regex operates on unicode. If we pass a str that is
             # invalid UTF-8 to Rust, it will rightfully complain. Here we do a quick and dirty
@@ -110,8 +112,10 @@ class Encoding:
             # string, but given that this is input we want to support, maybe that's okay.
             # Also we use errors="replace" to handle weird things like lone surrogates.
             text = text.encode("utf-8", "surrogatepass").decode("utf-8", "replace")
-            return self._core_bpe.encode(text, allowed_special)
-    
+            tokens, _ = self._core_bpe.encode(text, allowed_special)
+            return tokens
+        
+
 
     def decode(self, tokens: list[int], errors: str = "replace") -> str:
         """Decodes a list of tokens into a string.
@@ -125,7 +129,6 @@ class Encoding:
         'hello world'
         ```
         """
-        print(f"start to decode the tokens: {tokens}")
         return self._core_bpe.decode_bytes(tokens).decode("utf-8", errors=errors)
 
 
