@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-from tiktoken_py.load import load_tktoken_bpe
+from .load import load_tktoken_bpe
 
 ENDOFTEXT = "<|endoftext|>"
 FIM_PREFIX = "<|fim_prefix|>"
