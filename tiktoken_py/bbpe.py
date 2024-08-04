@@ -1,7 +1,41 @@
 #!/usr/bin/env python3
 # -*- coding:utf-8 -*-
+from copyreg import pickle
 import regex as re
 from itertools import islice, tee
+import numpy as np
+
+
+def byte_pair_merge(ranks: dict[list, int], piece: int):
+    parts = []
+    
+    min_rank = (np.iinfo(np.int32).max, np.iinfo(np.int32).max)
+    for i in range(0, len(piece) - 1, 2):
+        rank = ranks.get(piece[i: i + 2], np.iinfo(np.int32).max)
+        if rank < min_rank:
+            min_rank = (rank, i)
+        parts.append((rank, i))
+    
+    parts.append(len(piece) - 1, np.iinfo(np.int32).max)
+    parts.append(len(piece), np.iinfo(np.int32).max)
+    
+    def get_rank(parts, i):
+        # 用来服用 ranks和piece，不需要额外的通过参数形式传递到get_rank中
+        if i + 3 < len(parts):
+            rank =  ranks.get(piece[parts[i][0]:parts[i+3][0]], np.iinfo(np.int32).max)
+            return rank 
+        else:
+            return np.iinfo(np.int32).max
+
+    while min_rank[0] != np.iinfo(np.int32).max:
+        i = min_rank[1]
+        if i > 0:
+            parts[i-1][1] = get_rank(parts, i-1)
+
+        parts[i][1] = get_rank(parts, i)
+        del parts[i+1]  # 合并后面一个元素
+
+    
 class CoreBPE:
     def __init__(self,
                  encoder: dict[bytes, int]=None,
@@ -105,7 +139,7 @@ class CoreBPE:
                 ret.extend(token_bytes)
 
         return ret
-        
+
     def decode_bytes(self, tokens):
         return self._decode_native(tokens)
 
