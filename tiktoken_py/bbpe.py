@@ -7,33 +7,60 @@ import numpy as np
 
 
 def byte_pair_merge(ranks: dict[list, int], piece: int):
+    # parts表示分词的边界，保存的是每个词的开始位置以及该词的频率 (start, rank)
+    # 每个词的内容是当前词的开始位置start与下一个词的开始位置之间的内容，包括下一个词的起始位置
+    # 或者说是通用的bi-gram内容
+    # parts 中每一个元素可以当做是一个广义上的bi-gram的token
     parts = []
-    
+
+    # 请注意，tiktoken 在对 ranks 进行索引时是对字节进行哈希处理，而不是对词对 tokens pair
+    # 只要我们按照当前的方式进行BPE训练，这是等效的。打破这种等价关系的一个简单方法是解耦合并优先级与词索引，或者阻止特定的词合并。
     min_rank = (np.iinfo(np.int32).max, np.iinfo(np.int32).max)
-    for i in range(0, len(piece) - 1, 2):
+    for i in range(0, len(piece) - 1):
         rank = ranks.get(piece[i: i + 2], np.iinfo(np.int32).max)
-        if rank < min_rank:
+        if rank < min_rank[0]:
             min_rank = (rank, i)
-        parts.append((rank, i))
+        parts.append((i, rank))
     
-    parts.append(len(piece) - 1, np.iinfo(np.int32).max)
-    parts.append(len(piece), np.iinfo(np.int32).max)
+    parts.append((len(piece) - 1, np.iinfo(np.int32).max))
+    parts.append((len(piece), np.iinfo(np.int32).max))
     
     def get_rank(parts, i):
         # 用来服用 ranks和piece，不需要额外的通过参数形式传递到get_rank中
+        # 计算trigram的频率，当前 i 位置的bigram需要合并，即 parts[i]与parts[i+1]需要合并到一起
+        # 需要重新计算 (parts[i]parts[i+1], parts[i+2])的频率
         if i + 3 < len(parts):
-            rank =  ranks.get(piece[parts[i][0]:parts[i+3][0]], np.iinfo(np.int32).max)
+            trigram = piece[parts[i][0]:parts[i+3][0]]
+            rank =  ranks.get(trigram, np.iinfo(np.int32).max)
             return rank 
         else:
             return np.iinfo(np.int32).max
 
+    # rank 表示频率的排名，rank 越小，表示该组合频率越高
+    # 因此这里要找到rank最小的组合
+    # 这里需要一直合并，直到没有需要合并的bigram为止
     while min_rank[0] != np.iinfo(np.int32).max:
         i = min_rank[1]
         if i > 0:
-            parts[i-1][1] = get_rank(parts, i-1)
-
-        parts[i][1] = get_rank(parts, i)
+            # 获取合并之后的新的(left, i)的rank
+            parts[i-1] = (parts[i-1][0], get_rank(parts, i-1))
+        # 当前的元素min_rank已经合并了，需要合并min_rank后一个元素
+        # 即 (piece[i], piece[i+1])合并了，将 (piece[i] piece[i+1])作为一个元素
+        # 此时需要看一下 (piece[i]piece[i+1], piece[i+2])的频率
+        # 获取合并之后的(i, right)的rank
+        parts[i] = (parts[i][0], get_rank(parts, i))    # 重新赋值一个新的 tuple
+        # 删掉 part[i+1]，因为第 (i, i+1)已经合并了，一定不会合并(i+1, i+2)了，(i+1)被用在(i, i+1)合并的地方了
         del parts[i+1]  # 合并后面一个元素
+
+        # 此时需要重新找一个min_rank，即找出频率最大的待合并的bi-gram
+        min_rank = (np.iinfo(np.int32).max, np.iinfo(np.int32).max)
+        for i, bigram in enumerate(parts):
+            rank = bigram[1]
+            # 更新最小的rank， 即频率最大的组合
+            if rank < min_rank[0]:
+                min_rank = (rank, i)
+
+    return parts
 
     
 class CoreBPE:
@@ -66,7 +93,7 @@ class CoreBPE:
         self.sorted_token_bytes = sorted(self.encoder.keys())
 
     def encode(self, text: str, allowed_special: set[str]):
-        return  self._encode_native(text, allowed_special)
+        return self._encode_native(text, allowed_special)
 
     def _encode_native(self, text, allowed_special):
         special_regex = self.special_regex_tls
@@ -125,8 +152,15 @@ class CoreBPE:
 
     def bype_pair_encode(self, piece, ranks):
         assert len(piece) > 1
-        pairs = zip(piece, islice(piece, 1, None))
-        return [ranks[pair] for pair in pairs]
+        pairs =  byte_pair_merge(ranks, piece)
+        tokens = []
+        for idx in range(len(pairs) - 1):
+            start, end = pairs[idx][0], pairs[idx + 1][0]
+            tokens.append(ranks[piece[start:end]])
+
+        return tokens
+        # pairs = zip(piece, islice(piece, 1, None))
+        # return [ranks[pair] for pair in pairs]
 
     def _decode_native(self, tokens):
         ret = bytearray()
